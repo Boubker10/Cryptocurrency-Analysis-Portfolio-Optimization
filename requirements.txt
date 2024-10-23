@@ -2,7 +2,8 @@ streamlit
 pandas
 numpy
 requests
-torch==2.2.0+cpu
+torch
+torchvision
 scikit-learn
 plotly
 matplotlib
