@@ -792,7 +792,7 @@ def main():
     st.title("Cryptocurrency Analysis & Portfolio Optimization")
     
     # Paramètres
-    st.sidebar.header("Parameters")
+    st.sidebar.header("LSTM Parameters")
     params = {
         'sequence_length': st.sidebar.slider("Sequence Length", 10, 50, 30),
         'prediction_days': st.sidebar.slider("Prediction Days", 1, 30, 7),
