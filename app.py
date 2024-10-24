@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import lr_scheduler
+from prophet import Prophet
 from sklearn.preprocessing import MinMaxScaler
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -56,6 +57,206 @@ crypto_names= ["EOS Coin (EOS)",
 
 
 
+def train_prophet_model(df, crypto_name, periods=30):
+    """
+    Train Facebook Prophet model for cryptocurrency prediction
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the cryptocurrency data
+        crypto_name (str): Name of the cryptocurrency
+        periods (int): Number of days to forecast
+    
+    Returns:
+        dict: Contains forecast, model and metrics
+    """
+    # Prepare data for Prophet
+    prophet_df = df.reset_index()[['date', 'close']].rename(
+        columns={'date': 'ds', 'close': 'y'}
+    )
+    
+    # Create and train Prophet model
+    model = Prophet(
+        changepoint_prior_scale=0.05,
+        yearly_seasonality=True,
+        weekly_seasonality=True,
+        daily_seasonality=True,
+        interval_width=0.95
+    )
+    
+    with st.spinner(f'Training Prophet model for {crypto_name}...'):
+        model.fit(prophet_df)
+        
+        # Make future dataframe
+        future = model.make_future_dataframe(periods=periods)
+        # Create forecast
+        forecast = model.predict(future)
+        
+        # Calculate metrics
+        y_true = prophet_df['y'].values
+        y_pred = forecast['yhat'][:len(y_true)]
+        
+        mse = np.mean((y_true - y_pred) ** 2)
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(y_true - y_pred))
+        
+        metrics = {
+            'RMSE': rmse,
+            'MAE': mae,
+            'Forecast Period': f'{periods} days'
+        }
+        
+        return {
+            'forecast': forecast,
+            'model': model,
+            'metrics': metrics
+        }
+
+def plot_prophet_forecast(results, crypto_name):
+    """
+    Create an interactive plot for Prophet forecast
+    
+    Args:
+        results (dict): Dictionary containing forecast and model
+        crypto_name (str): Name of the cryptocurrency
+    
+    Returns:
+        go.Figure: Plotly figure object
+    """
+    forecast = results['forecast']
+    model = results['model']
+    
+    fig = make_subplots(
+        rows=2, 
+        cols=1,
+        subplot_titles=(
+            f'{crypto_name} Price Forecast',
+            'Forecast Components'
+        ),
+        vertical_spacing=0.2
+    )
+    
+    # Main forecast plot
+    fig.add_trace(
+        go.Scatter(
+            x=forecast['ds'],
+            y=forecast['yhat'],
+            name='Forecast',
+            line=dict(color='blue')
+        ),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=forecast['ds'],
+            y=forecast['yhat_upper'],
+            fill=None,
+            mode='lines',
+            line=dict(color='rgba(0,0,255,0.2)'),
+            name='Upper Bound'
+        ),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=forecast['ds'],
+            y=forecast['yhat_lower'],
+            fill='tonexty',
+            mode='lines',
+            line=dict(color='rgba(0,0,255,0.2)'),
+            name='Lower Bound'
+        ),
+        row=1, col=1
+    )
+    
+    # Components plot
+    components = ['trend', 'weekly', 'yearly']
+    colors = ['red', 'green', 'purple']
+    
+    for component, color in zip(components, colors):
+        if component in forecast.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=forecast['ds'],
+                    y=forecast[component],
+                    name=f'{component.capitalize()} Component',
+                    line=dict(color=color)
+                ),
+                row=2, col=1
+            )
+    
+    fig.update_layout(
+        height=800,
+        template="plotly_dark",
+        showlegend=True,
+        title=dict(
+            text=f"{crypto_name} Prophet Forecast Analysis",
+            x=0.5
+        )
+    )
+    
+    return fig
+
+def add_prophet_section(tabs, all_df, filenames, crypto_names):
+    """Add Prophet model section to the app"""
+    with tabs[1]:
+        st.header("Prophet Model Predictions")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            selected_crypto = st.selectbox(
+                "Select Cryptocurrency for Prophet Analysis",
+                crypto_names,
+                key='prophet_crypto'
+            )
+            
+            forecast_days = st.slider(
+                "Forecast Days",
+                min_value=7,
+                max_value=90,
+                value=30,
+                key='prophet_forecast_days'
+            )
+        
+        if st.button("Train Prophet Model"):
+            try:
+                # Get data for selected crypto
+                symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
+                crypto_df = all_df[all_df['symbol'] == symbol].copy()
+                
+                # Train Prophet model
+                prophet_results = train_prophet_model(
+                    crypto_df,
+                    selected_crypto,
+                    periods=forecast_days
+                )
+                
+                # Display metrics
+                with col2:
+                    st.subheader("Prophet Model Metrics")
+                    metrics = prophet_results['metrics']
+                    for metric, value in metrics.items():
+                        if isinstance(value, (int, float)):
+                            st.metric(metric, f"{value:.2f}")
+                        else:
+                            st.metric(metric, value)
+                
+                # Plot forecast
+                fig = plot_prophet_forecast(prophet_results, selected_crypto)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show forecast table
+                st.subheader("Detailed Forecast")
+                forecast_df = prophet_results['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days)
+                forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
+                st.dataframe(forecast_df)
+                
+            except Exception as e:
+                st.error(f"Error in Prophet analysis: {str(e)}")
+
+
+
 class CryptoDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.FloatTensor(X)
@@ -66,6 +267,7 @@ class CryptoDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
+
 
 class LSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, output_size, dropout=0.2):
@@ -601,7 +803,7 @@ def main():
     risk_free_rate = st.sidebar.number_input("Risk-free Rate (%)", 0.0, 10.0, 1.0) / 100
     
     # Interface principale
-    tabs = st.tabs(["Data Analysis", "Model Training", "Portfolio Optimization"])
+    tabs = st.tabs(["Data Analysis", "LSTM Training","Facebook Prophet training", "Portfolio Optimization"])
     
     # Chargement des données
     with st.spinner("Loading data..."):
@@ -649,7 +851,7 @@ def main():
             except Exception as e:
                 st.error(f"Error during training: {str(e)}")
     
-    with tabs[2]:
+    with tabs[3]:
         if 'all_returns' not in st.session_state:
             st.warning("Please train the models first.")
         else:
@@ -672,6 +874,69 @@ def main():
                 
             except Exception as e:
                 st.error(f"Error in portfolio optimization: {str(e)}")
+    with tabs[2]:
+        st.header("Prophet Model Predictions")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            selected_crypto = st.selectbox(
+                "Select Cryptocurrency for Prophet Analysis",
+                crypto_names,
+                key='prophet_crypto'
+            )
+            
+            forecast_days = st.slider(
+                "Forecast Days",
+                min_value=7,
+                max_value=90,
+                value=30,
+                key='prophet_forecast_days'
+            )
+        
+        if st.button("Generate Prophet Forecast"):
+            try:
+                # Get data for selected crypto
+                symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
+                crypto_df = all_df[all_df['symbol'] == symbol].copy()
+                
+                # Train Prophet model
+                prophet_results = train_prophet_model(
+                    crypto_df,
+                    selected_crypto,
+                    periods=forecast_days
+                )
+                
+                # Display metrics
+                with col2:
+                    st.subheader("Prophet Model Metrics")
+                    metrics = prophet_results['metrics']
+                    for metric, value in metrics.items():
+                        if isinstance(value, (int, float)):
+                            st.metric(metric, f"{value:.2f}")
+                        else:
+                            st.metric(metric, value)
+                
+                # Plot forecast
+                fig = plot_prophet_forecast(prophet_results, selected_crypto)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show forecast table
+                st.subheader("Detailed Forecast")
+                forecast_df = prophet_results['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days)
+                forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
+                st.dataframe(forecast_df)
+                
+                # Afficher les composants de la prédiction
+                if st.checkbox("Show Forecast Components"):
+                    st.subheader("Forecast Components")
+                    try:
+                        fig_comp = prophet_results['model'].plot_components(prophet_results['forecast'])
+                        st.pyplot(fig_comp)
+                    except Exception as e:
+                        st.error(f"Error displaying components: {str(e)}")
+                
+            except Exception as e:
+                st.error(f"Error in Prophet analysis: {str(e)}")
 
 if __name__ == "__main__":
     main()
