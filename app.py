@@ -8,12 +8,74 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim import lr_scheduler
 from prophet import Prophet
 from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import scipy.optimize as optimize
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import yfinance as yf
 from datetime import datetime, timedelta
+from pmdarima import auto_arima
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 import warnings
 warnings.filterwarnings('ignore')
+
+def plot_time_series(data, title, ylabel, key):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data.index, y=data, mode='lines', name='Prix Ajusté', line=dict(color='blue')))
+    fig.update_layout(title=title, xaxis_title='Date', yaxis_title=ylabel, hovermode="x unified")
+    st.plotly_chart(fig, key=key)
+    return fig
+
+
+def plot_log_returns(data, key):
+    log_returns = np.log(data / data.shift(1)).dropna()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=log_returns.index, y=log_returns, mode='lines', name='Log Returns', line=dict(color='green')))
+    fig.update_layout(title="Rendement (Log Returns)", xaxis_title='Date', yaxis_title='Log Returns', hovermode="x unified")
+    st.plotly_chart(fig, key=key)
+    return fig, log_returns
+
+
+def adf_test(series):
+    result = adfuller(series.dropna())
+    st.write(f"Test de Dickey-Fuller augmenté :")
+    st.write(f"Statistique de test : {result[0]}")
+    st.write(f"p-value : {result[1]}")
+    st.write(f"Valeurs critiques : {result[4]}")
+
+
+def plot_acf_pacf(data):
+    fig_acf = plt.figure(figsize=(12, 6))
+    ax1 = fig_acf.add_subplot(211)
+    plot_acf(data, ax=ax1, lags=30)
+    ax2 = fig_acf.add_subplot(212)
+    plot_pacf(data, ax=ax2, lags=30)
+    st.pyplot(fig_acf) 
+
+
+def load_yfinance_data(ticker, start_date, end_date):
+    stock_data = yf.download(ticker, start=start_date, end=end_date)
+    stock_data['Date'] = stock_data.index
+    stock_data.set_index('Date', inplace=True)
+    return stock_data
+
+
+def run_prophet(stock_data_adj_close, forecast_steps):
+    df_prophet = stock_data_adj_close.reset_index().rename(columns={"Date": "ds", "Adj Close": "y"})
+    model_prophet = Prophet(daily_seasonality=True)
+    model_prophet.fit(df_prophet)
+    
+    future_dates = model_prophet.make_future_dataframe(periods=forecast_steps)
+    forecast = model_prophet.predict(future_dates)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_prophet['ds'], y=df_prophet['y'], mode='lines', name='Données Historiques', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Prévisions', line=dict(color='red')))
+    fig.update_layout(title=f'Prévisions avec Prophet pour {forecast_steps} jours', xaxis_title='Date', yaxis_title='Prix Ajusté (USD)', hovermode="x unified")
+    st.plotly_chart(fig, key='prophet_forecast')
+
 
 
 st.set_page_config(layout="wide", page_title="Crypto Analysis & Prediction")
@@ -68,12 +130,10 @@ def train_prophet_model(df, crypto_name, periods=30):
     Returns:
         dict: Contains forecast, model and metrics
     """
-    # Prepare data for Prophet
     prophet_df = df.reset_index()[['date', 'close']].rename(
         columns={'date': 'ds', 'close': 'y'}
     )
     
-    # Create and train Prophet model
     model = Prophet(
         changepoint_prior_scale=0.05,
         yearly_seasonality=True,
@@ -84,13 +144,8 @@ def train_prophet_model(df, crypto_name, periods=30):
     
     with st.spinner(f'Training Prophet model for {crypto_name}...'):
         model.fit(prophet_df)
-        
-        # Make future dataframe
         future = model.make_future_dataframe(periods=periods)
-        # Create forecast
         forecast = model.predict(future)
-        
-        # Calculate metrics
         y_true = prophet_df['y'].values
         y_pred = forecast['yhat'][:len(y_true)]
         
@@ -134,7 +189,6 @@ def plot_prophet_forecast(results, crypto_name):
         vertical_spacing=0.2
     )
     
-    # Main forecast plot
     fig.add_trace(
         go.Scatter(
             x=forecast['ds'],
@@ -169,7 +223,6 @@ def plot_prophet_forecast(results, crypto_name):
         row=1, col=1
     )
     
-    # Components plot
     components = ['trend', 'weekly', 'yearly']
     colors = ['red', 'green', 'purple']
     
@@ -335,7 +388,6 @@ def create_crypto_plot(df, crypto_name):
                [{}, {}]]
     )
     
-    # Candlestick chart
     fig.add_trace(
         go.Candlestick(
             x=df.index,
@@ -786,154 +838,248 @@ def calculate_portfolio_metrics(weights, returns_df):
     }
 
 def main():
-    st.title("Cryptocurrency Analysis & Portfolio Optimization")
-    
-    # Paramètres
-    st.sidebar.header("LSTM Parameters")
-    params = {
-        'sequence_length': st.sidebar.slider("Sequence Length", 10, 50, 30),
-        'prediction_days': st.sidebar.slider("Prediction Days", 1, 30, 7),
-        'epochs': st.sidebar.slider("Training Epochs", 10, 100, 50),
-        'batch_size': st.sidebar.slider("Batch Size", 16, 64, 32)
-    }
-    
-    risk_free_rate = st.sidebar.number_input("Risk-free Rate (%)", 0.0, 10.0, 1.0) / 100
-    
-    # Interface principale
-    tabs = st.tabs(["Data Analysis", "LSTM Training","Facebook Prophet training", "Portfolio Optimization"])
-    
-    # Chargement des données
-    with st.spinner("Loading data..."):
-        try:
-            all_df, filenames = load_data(urls, START_DATE)
-            st.success("Data loaded successfully!")
-            returns_df = pd.DataFrame()
-            
-            for filename, crypto_name in zip(filenames, crypto_names):
-                symbol = filename + "/USD"
-                crypto_df = all_df[all_df['symbol'] == symbol].copy()
-                returns_df[crypto_name] = crypto_df['close'].pct_change().dropna()
-                
-        except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
-            return
-    
-    # Onglet 1: Analyse des données
-    with tabs[0]:
-        st.subheader("Technical Analysis")
-        selected_crypto = st.selectbox("Select Cryptocurrency", crypto_names)
-        
-        symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
-        crypto_df = all_df[all_df['symbol'] == symbol].copy()
-        
-        crypto_df = create_technical_indicators(crypto_df)
-        fig = plot_crypto_dashboard(crypto_df, selected_crypto)
-        st.plotly_chart(fig)
+    st.title("Cryptocurrency &Stocks  Analysis and Portfolio Optimization")
+    tabs = st.tabs(["Cryptocurrency", "Stocks"])
     with tabs[1]:
-        if st.button("Train Models"):
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            st.info(f"Using device: {device}")
-            
-            try:
-                all_predictions, all_metrics, model_returns = train_all_models(
-                    all_df, filenames, crypto_names, params, device
-                )
-                
-                st.session_state['all_predictions'] = all_predictions
-                st.session_state['all_metrics'] = all_metrics
-                st.session_state['all_returns'] = model_returns
-                
-                st.success("Training completed!")
-                
-            except Exception as e:
-                st.error(f"Error during training: {str(e)}")
-    
-    with tabs[3]:
-        if 'all_returns' not in st.session_state:
-            st.warning("Please train the models first.")
-        else:
-            try:
-                optimal_weights = optimize_portfolio(st.session_state['all_returns'], risk_free_rate)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    fig = plot_portfolio_allocation(optimal_weights, crypto_names)
-                    st.plotly_chart(fig)
-                
-                with col2:
-                    metrics = calculate_portfolio_metrics(
-                        optimal_weights, 
-                        st.session_state['all_returns']
-                    )
-                    st.write("Portfolio Metrics:")
-                    for metric, value in metrics.items():
-                        st.metric(metric, value)
-                
-            except Exception as e:
-                st.error(f"Error in portfolio optimization: {str(e)}")
-    with tabs[2]:
-        st.header("Prophet Model Predictions")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            selected_crypto = st.selectbox(
-                "Select Cryptocurrency for Prophet Analysis",
-                crypto_names,
-                key='prophet_crypto'
-            )
-            
-            forecast_days = st.slider(
-                "Forecast Days",
-                min_value=7,
-                max_value=90,
-                value=30,
-                key='prophet_forecast_days'
-            )
-        
-        if st.button("Generate Prophet Forecast"):
-            try:
-                # Get data for selected crypto
-                symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
-                crypto_df = all_df[all_df['symbol'] == symbol].copy()
-                
-                # Train Prophet model
-                prophet_results = train_prophet_model(
-                    crypto_df,
-                    selected_crypto,
-                    periods=forecast_days
-                )
-                
-                # Display metrics
-                with col2:
-                    st.subheader("Prophet Model Metrics")
-                    metrics = prophet_results['metrics']
-                    for metric, value in metrics.items():
-                        if isinstance(value, (int, float)):
-                            st.metric(metric, f"{value:.2f}")
+        st.subheader("Stocks Analysis")
+        st.title("Stock Forecasting & Analysis")
+        sk_tabs = st.tabs(["Time Series Analysis", "Forecasting"])
+        with sk_tabs[0]:
+            st.subheader("Stock Time Series Analysis")
+            company = st.selectbox("Select Company", ["AAPL - Apple", "NVDA - Nvidia", "FB - Facebook (Meta)", "TSLA - Tesla"])
+            tickers = {
+                "AAPL - Apple": "AAPL",
+                "NVDA - Nvidia": "NVDA",
+                "FB - Facebook (Meta)": "META",
+                "TSLA - Tesla": "TSLA"
+            }
+            start_date = st.date_input("Select Start Date", value=datetime(2020, 1, 1))
+            end_date = st.date_input("Select End Date", value=datetime.now())
+            if 'stock_data' not in st.session_state:
+                st.session_state['stock_data'] = None
+
+            if st.button("Show Time Series Data"):
+                st.session_state['stock_data'] = load_yfinance_data(tickers[company], start_date, end_date)
+                st.session_state['stock_data_adj_close'] = st.session_state['stock_data']['Adj Close'].astype(np.float32)
+
+                st.subheader(f"Historical Data - {company}")
+                st.session_state['time_series_fig'] = plot_time_series(st.session_state['stock_data_adj_close'], f"Adjusted Stock Prices ({start_date} - {end_date})", "Adjusted Price (USD)", key="time_series")
+                st.session_state['log_returns_fig'], log_returns = plot_log_returns(st.session_state['stock_data_adj_close'], key="log_returns")
+                st.subheader("Stationarity Test (ADF)")
+                adf_test(st.session_state['stock_data_adj_close'])
+                st.subheader("ACF and PACF")
+                st.session_state['acf_pacf_fig'] = plot_acf_pacf(log_returns)
+            if st.session_state['stock_data'] is not None:
+                stock_data_adj_close = st.session_state['stock_data_adj_close']
+                if 'time_series_fig' in st.session_state:
+                    st.plotly_chart(st.session_state['time_series_fig'], key="time_series_reuse")
+                if 'log_returns_fig' in st.session_state:
+                    st.plotly_chart(st.session_state['log_returns_fig'], key="log_returns_reuse")
+
+        with sk_tabs[1]:
+            model_choice = st.radio("Select Forecasting Model", ["SARIMA", "Prophet"])
+            forecast_steps = st.number_input("Forecast Steps", min_value=1, max_value=365, value=30)
+            if model_choice == "SARIMA":
+                param_choice = st.radio("Choisir la méthode", ("Auto-ARIMA (optimisation automatique)", "Paramètres manuels"))
+
+                if param_choice == "Paramètres manuels":
+                    p = st.number_input("Paramètre p (ordre AR)", min_value=0, max_value=5, value=1)
+                    d = st.number_input("Paramètre d (ordre de différenciation)", min_value=0, max_value=2, value=1)
+                    q = st.number_input("Paramètre q (ordre MA)", min_value=0, max_value=5, value=1)
+
+                    seasonal = st.checkbox("Inclure des composantes saisonnières (SARIMA)")
+                    if seasonal:
+                        P = st.number_input("Paramètre P (ordre AR saisonnier)", min_value=0, max_value=5, value=1)
+                        D = st.number_input("Paramètre D (ordre de différenciation saisonnier)", min_value=0, max_value=2, value=1)
+                        Q = st.number_input("Paramètre Q (ordre MA saisonnier)", min_value=0, max_value=5, value=1)
+                        s = st.number_input("Paramètre s (période saisonnière)", min_value=1, max_value=365, value=12)
+
+                if param_choice == "Auto-ARIMA (optimisation automatique)":
+                    if st.button("Lancer la prévision avec SARIMA"):
+                        st.subheader("Optimisation des paramètres avec auto-ARIMA")
+                        stock_data_log = np.log(stock_data_adj_close)  
+                        auto_model = auto_arima(stock_data_log, start_p=1, start_q=1,
+                                                max_p=5, max_q=5, m=12,
+                                                start_P=0, seasonal=True,
+                                                d=1, D=1, trace=True,
+                                                error_action='ignore',
+                                                suppress_warnings=True,
+                                                stepwise=True)
+
+                        st.write(auto_model.summary())
+                        model = SARIMAX(stock_data_log, order=auto_model.order, seasonal_order=auto_model.seasonal_order)
+                        results = model.fit()
+
+                        forecast = results.get_forecast(steps=forecast_steps)
+                        forecast_values = np.exp(forecast.predicted_mean)
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=stock_data_adj_close.index, y=stock_data_adj_close, mode='lines', name='Données Historiques'))
+                        fig.add_trace(go.Scatter(x=forecast_values.index, y=forecast_values, mode='lines', name='Prévisions'))
+                        fig.update_layout(title=f'Prévisions SARIMA (Auto-ARIMA) pour {forecast_steps} jours', xaxis_title='Date', yaxis_title='Prix Ajusté (USD)')
+                        st.plotly_chart(fig, key='sarima_forecast')
+
+                elif param_choice == "Paramètres manuels":
+                    if st.button("Lancer la prévision avec les paramètres manuels"):
+                        stock_data_log = np.log(stock_data_adj_close)  
+                        if seasonal:
+                            model = SARIMAX(stock_data_log, order=(p, d, q), seasonal_order=(P, D, Q, s))
                         else:
-                            st.metric(metric, value)
+                            model = SARIMAX(stock_data_log, order=(p, d, q))
+
+                        results = model.fit()
+
+                        forecast = results.get_forecast(steps=forecast_steps)
+                        forecast_values = np.exp(forecast.predicted_mean)
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=stock_data_adj_close.index, y=stock_data_adj_close, mode='lines', name='Données Historiques'))
+                        fig.add_trace(go.Scatter(x=forecast_values.index, y=forecast_values, mode='lines', name='Prévisions'))
+                        fig.update_layout(title=f'Prévisions SARIMA (paramètres manuels) pour {forecast_steps} jours', xaxis_title='Date', yaxis_title='Prix Ajusté (USD)')
+                        st.plotly_chart(fig, key='sarima_manual_forecast')
+
+            elif model_choice == "Prophet":
+                    if st.button("Lancer la prévision avec Prophet"):
+                        run_prophet(stock_data_adj_close, forecast_steps)
+
+    with tabs[0]:
+        st.subheader("Cryptocurrency Analysis")
+        tabs = st.tabs(["Data Analysis", "LSTM Training","Facebook Prophet training", "Portfolio Optimization"])
+        
+        with st.spinner("Loading data..."):
+            try:
+                all_df, filenames = load_data(urls, START_DATE)
+                st.success("Data loaded successfully!")
+                returns_df = pd.DataFrame()
                 
-                # Plot forecast
-                fig = plot_prophet_forecast(prophet_results, selected_crypto)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show forecast table
-                st.subheader("Detailed Forecast")
-                forecast_df = prophet_results['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days)
-                forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
-                st.dataframe(forecast_df)
-                
-                # Afficher les composants de la prédiction
-                if st.checkbox("Show Forecast Components"):
-                    st.subheader("Forecast Components")
-                    try:
-                        fig_comp = prophet_results['model'].plot_components(prophet_results['forecast'])
-                        st.pyplot(fig_comp)
-                    except Exception as e:
-                        st.error(f"Error displaying components: {str(e)}")
-                
+                for filename, crypto_name in zip(filenames, crypto_names):
+                    symbol = filename + "/USD"
+                    crypto_df = all_df[all_df['symbol'] == symbol].copy()
+                    returns_df[crypto_name] = crypto_df['close'].pct_change().dropna()
+                    
             except Exception as e:
-                st.error(f"Error in Prophet analysis: {str(e)}")
+                st.error(f"Error loading data: {str(e)}")
+                return
+
+        with tabs[0]:
+            st.subheader("Technical Analysis")
+            selected_crypto = st.selectbox("Select Cryptocurrency", crypto_names)
+            
+            symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
+            crypto_df = all_df[all_df['symbol'] == symbol].copy()
+            
+            crypto_df = create_technical_indicators(crypto_df)
+            fig = plot_crypto_dashboard(crypto_df, selected_crypto)
+            st.plotly_chart(fig)
+        with tabs[1]:
+            crypto_model_choice = st.radio("Select a Model for Cryptocurrency Forecasting", ("Technical Analysis", "LSTM"))
+            if crypto_model_choice == "LSTM":
+                st.sidebar.header("LSTM Parameters")
+                params = {
+                    'sequence_length': st.sidebar.slider("Sequence Length", 10, 50, 30),
+                    'prediction_days': st.sidebar.slider("Prediction Days", 1, 30, 7),
+                    'epochs': st.sidebar.slider("Training Epochs", 10, 100, 50),
+                    'batch_size': st.sidebar.slider("Batch Size", 16, 64, 32)
+                }
+
+                risk_free_rate = st.sidebar.number_input("Risk-free Rate (%)", 0.0, 10.0, 1.0) / 100
+
+            if st.button("Train Models"):
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                st.info(f"Using device: {device}")
+                
+                try:
+                    all_predictions, all_metrics, model_returns = train_all_models(
+                        all_df, filenames, crypto_names, params, device
+                    )
+                    
+                    st.session_state['all_predictions'] = all_predictions
+                    st.session_state['all_metrics'] = all_metrics
+                    st.session_state['all_returns'] = model_returns
+                    
+                    st.success("Training completed!")
+                    
+                except Exception as e:
+                    st.error(f"Error during training: {str(e)}")
+        
+        with tabs[3]:
+            if 'all_returns' not in st.session_state:
+                st.warning("Please train the models first.")
+            else:
+                try:
+                    optimal_weights = optimize_portfolio(st.session_state['all_returns'], risk_free_rate)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig = plot_portfolio_allocation(optimal_weights, crypto_names)
+                        st.plotly_chart(fig)
+                    
+                    with col2:
+                        metrics = calculate_portfolio_metrics(
+                            optimal_weights, 
+                            st.session_state['all_returns']
+                        )
+                        st.write("Portfolio Metrics:")
+                        for metric, value in metrics.items():
+                            st.metric(metric, value)
+                    
+                except Exception as e:
+                    st.error(f"Error in portfolio optimization: {str(e)}")
+        with tabs[2]:
+            st.header("Prophet Model Predictions")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                selected_crypto = st.selectbox(
+                    "Select Cryptocurrency for Prophet Analysis",
+                    crypto_names,
+                    key='prophet_crypto'
+                )
+                
+                forecast_days = st.slider(
+                    "Forecast Days",
+                    min_value=7,
+                    max_value=90,
+                    value=30,
+                    key='prophet_forecast_days'
+                )
+            
+            if st.button("Generate Prophet Forecast"):
+                try:
+                    symbol = filenames[crypto_names.index(selected_crypto)] + "/USD"
+                    crypto_df = all_df[all_df['symbol'] == symbol].copy()
+                    
+    
+                    prophet_results = train_prophet_model(
+                        crypto_df,
+                        selected_crypto,
+                        periods=forecast_days
+                    )
+                    
+                    with col2:
+                        st.subheader("Prophet Model Metrics")
+                        metrics = prophet_results['metrics']
+                        for metric, value in metrics.items():
+                            if isinstance(value, (int, float)):
+                                st.metric(metric, f"{value:.2f}")
+                            else:
+                                st.metric(metric, value)
+                    
+                    fig = plot_prophet_forecast(prophet_results, selected_crypto)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.subheader("Detailed Forecast")
+                    forecast_df = prophet_results['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days)
+                    forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
+                    st.dataframe(forecast_df)
+                    if st.checkbox("Show Forecast Components"):
+                        st.subheader("Forecast Components")
+                        try:
+                            fig_comp = prophet_results['model'].plot_components(prophet_results['forecast'])
+                            st.pyplot(fig_comp)
+                        except Exception as e:
+                            st.error(f"Error displaying components: {str(e)}")
+                    
+                except Exception as e:
+                    st.error(f"Error in Prophet analysis: {str(e)}")
 
 if __name__ == "__main__":
     main()
