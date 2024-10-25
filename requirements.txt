@@ -1,8 +1,6 @@
 streamlit
 pandas
-numpy
 requests
-torch
 prophet
 torchvision
 scikit-learn
@@ -11,5 +9,7 @@ matplotlib
 scipy
 pandas-datareader
 statsmodels
-yfinance
-pmdarima
+numpy==1.23.5
+torch==2.0.1
+pmdarima==2.0.3
+
