@@ -16,7 +16,6 @@ from statsmodels.tsa.stattools import adfuller
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 import yfinance as yf
 from datetime import datetime, timedelta
-from pmdarima import auto_arima
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import warnings
 warnings.filterwarnings('ignore')
@@ -897,27 +896,7 @@ def main():
                 if param_choice == "Auto-ARIMA (optimisation automatique)":
                     if st.button("Lancer la prévision avec SARIMA"):
                         st.subheader("Optimisation des paramètres avec auto-ARIMA")
-                        stock_data_log = np.log(stock_data_adj_close)  
-                        auto_model = auto_arima(stock_data_log, start_p=1, start_q=1,
-                                                max_p=5, max_q=5, m=12,
-                                                start_P=0, seasonal=True,
-                                                d=1, D=1, trace=True,
-                                                error_action='ignore',
-                                                suppress_warnings=True,
-                                                stepwise=True)
-
-                        st.write(auto_model.summary())
-                        model = SARIMAX(stock_data_log, order=auto_model.order, seasonal_order=auto_model.seasonal_order)
-                        results = model.fit()
-
-                        forecast = results.get_forecast(steps=forecast_steps)
-                        forecast_values = np.exp(forecast.predicted_mean)
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=stock_data_adj_close.index, y=stock_data_adj_close, mode='lines', name='Données Historiques'))
-                        fig.add_trace(go.Scatter(x=forecast_values.index, y=forecast_values, mode='lines', name='Prévisions'))
-                        fig.update_layout(title=f'Prévisions SARIMA (Auto-ARIMA) pour {forecast_steps} jours', xaxis_title='Date', yaxis_title='Prix Ajusté (USD)')
-                        st.plotly_chart(fig, key='sarima_forecast')
-
+    
                 elif param_choice == "Paramètres manuels":
                     if st.button("Lancer la prévision avec les paramètres manuels"):
                         stock_data_log = np.log(stock_data_adj_close)  
