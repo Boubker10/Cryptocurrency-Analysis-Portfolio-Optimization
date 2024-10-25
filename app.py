@@ -18,7 +18,14 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import warnings
+import base64
 warnings.filterwarnings('ignore')
+
+image = "assets/youboufinances.png"
+
+encoded_image = base64.b64encode(open(image, 'rb').read()).decode('ascii')
+
+st.image(f"data:image/png;base64,{encoded_image}", width=200)
 
 def plot_time_series(data, title, ylabel, key):
     fig = go.Figure()
