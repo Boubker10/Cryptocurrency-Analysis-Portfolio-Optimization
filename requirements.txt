@@ -3,6 +3,7 @@ pandas
 numpy
 requests
 torch
+prophet
 torchvision
 scikit-learn
 plotly
