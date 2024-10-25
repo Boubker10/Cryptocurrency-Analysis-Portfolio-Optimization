@@ -21,11 +21,11 @@ import warnings
 import base64
 warnings.filterwarnings('ignore')
 
-image = "assets/youboufinances.png"
+image = "assets\youboufinance.PNG"
 
 encoded_image = base64.b64encode(open(image, 'rb').read()).decode('ascii')
 
-st.image(f"data:image/png;base64,{encoded_image}", width=200)
+
 
 def plot_time_series(data, title, ylabel, key):
     fig = go.Figure()
@@ -844,6 +844,7 @@ def calculate_portfolio_metrics(weights, returns_df):
     }
 
 def main():
+    st.image(f"data:image/png;base64,{encoded_image}", width=200)
     st.title("Cryptocurrency &Stocks  Analysis and Portfolio Optimization")
     tabs = st.tabs(["Cryptocurrency", "Stocks"])
     with tabs[1]:
