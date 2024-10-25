@@ -15,10 +15,9 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configuration
+
 st.set_page_config(layout="wide", page_title="Crypto Analysis & Prediction")
 
-# Constants
 START_DATE = "2023-01-01"
 RSI_TIME_WINDOW = 7
 
@@ -349,7 +348,6 @@ def create_crypto_plot(df, crypto_name):
         row=1, col=1
     )
     
-    # Volume chart
     fig.add_trace(
         go.Bar(
             x=df.index,
@@ -360,7 +358,6 @@ def create_crypto_plot(df, crypto_name):
         row=3, col=1
     )
     
-    # Price chart with bands
     fig.add_trace(
         go.Scatter(
             x=df.index,
@@ -408,7 +405,7 @@ def create_crypto_plot(df, crypto_name):
         row=3, col=2
     )
     
-    # Update layout
+
     fig.update_layout(
         width=1120,
         height=650,
@@ -421,7 +418,7 @@ def create_crypto_plot(df, crypto_name):
         showlegend=False
     )
     
-    # Update axes
+
     fig.update_xaxes(
         rangeslider_visible=False,
         showgrid=True,
@@ -434,7 +431,7 @@ def create_crypto_plot(df, crypto_name):
         ticksuffix='$'
     )
     
-    # Update RSI y-axis
+
     fig.update_yaxes(ticksuffix="", range=[0, 100], row=3, col=2)
     
     return fig
@@ -465,25 +462,25 @@ def prepare_data(df, sequence_length=30, prediction_days=7, train_split=0.8):
     if df.empty:
         raise ValueError("DataFrame vide")
     
-    # Calculer les rendements
+
     returns = df['close'].pct_change()
     
-    # Filtrer les rendements extrêmes
+
     mean_return = returns.mean()
     std_return = returns.std()
     returns = returns[abs(returns - mean_return) <= 3 * std_return]
     
-    # Gérer les valeurs infinies et manquantes
+
     returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
     
     if len(returns) < sequence_length + prediction_days + 1:
         raise ValueError(f"Pas assez de données: {len(returns)} points disponibles")
     
-    # Normaliser les rendements
+
     scaler = MinMaxScaler()
     returns_scaled = scaler.fit_transform(returns.values.reshape(-1, 1))
     
-    # Créer les séquences
+
     X, y = [], []
     for i in range(len(returns_scaled) - sequence_length - prediction_days):
         X.append(returns_scaled[i:(i + sequence_length)])
@@ -492,7 +489,7 @@ def prepare_data(df, sequence_length=30, prediction_days=7, train_split=0.8):
     X = np.array(X)
     y = np.array(y)
     
-    # Split train/test
+
     train_size = int(len(X) * train_split)
     X_train, X_test = X[:train_size], X[train_size:]
     y_train, y_test = y[:train_size], y[train_size:]
@@ -532,7 +529,7 @@ def train_model(model, train_loader, test_loader, epochs, device):
             
             train_loss += loss.item()
         
-        # Validation
+
         model.eval()
         test_loss = 0
         with torch.no_grad():
@@ -562,7 +559,7 @@ def train_model(model, train_loader, test_loader, epochs, device):
             st.info(f"Early stopping triggered after {epoch + 1} epochs")
             break
         
-        # Update interface
+
         progress = (epoch + 1) / epochs
         progress_bar.progress(progress)
         status_text.text(f'Epoch [{epoch+1}/{epochs}] - Train Loss: {avg_train_loss:.6f}, Test Loss: {avg_test_loss:.6f}')
