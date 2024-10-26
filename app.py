@@ -845,6 +845,7 @@ def calculate_portfolio_metrics(weights, returns_df):
 
 def main():
     st.image(f"data:image/png;base64,{encoded_image}", width=200)
+    st.title("JennateFinance")
     st.title("Cryptocurrency &Stocks  Analysis and Portfolio Optimization")
     tabs = st.tabs(["Cryptocurrency", "Stocks"])
     with tabs[1]:
