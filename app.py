@@ -21,7 +21,7 @@ import warnings
 import base64
 warnings.filterwarnings('ignore')
 
-image = "assets/jennate.PNG"
+image = "assets/youboufinance.PNG"
 
 encoded_image = base64.b64encode(open(image, 'rb').read()).decode('ascii')
 
